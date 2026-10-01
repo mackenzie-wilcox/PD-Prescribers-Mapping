@@ -26,8 +26,10 @@ The census tract boundaries were obtained using the R tigris package and the U.S
 
 ## Provider Definition: 
 Providers were identified using the Gnrc_Name variable in the Medicare Part D data.
+
 The primary criterion is: 
-Gnrc_Name == "Carbidopa/Levodopa"
+
+  Gnrc_Name == "Carbidopa/Levodopa"
 
 Provider classifications are based on the CMS prscrbr_type variables included in the source data
 
