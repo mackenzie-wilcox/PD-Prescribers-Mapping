@@ -1,0 +1,147 @@
+---
+title: "01_Data_Cleaning"
+author: "Mackenzie Wilcox"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(
+  root.dir = "C:/Users/mackw/Box/2.Mackenzie/PD Prescribers (Mapping)")
+```
+
+# Load Libraries and Datasets
+```{r}
+rm(list=ls())
+library(dplyr)
+library(readxl)
+library(readr)
+library(tidycensus)
+library(tidyr)
+library(gt)
+library(sf)
+library(stringr)
+library(tigris)
+access <- read_excel("Analysis Datasets/ne_tr._2024.xlsx")
+prscrb <- read_csv("Analysis Datasets/Data2023.csv")
+```
+
+# Organize specialties/sub-specialties
+```{r}
+prscrb <- prscrb %>%
+  filter(Gnrc_Name == "Carbidopa/Levodopa") %>%
+  mutate(specialty = case_when(
+    str_detect(Prscrbr_Type, "Nurse Practitioner") ~ 1,
+    str_detect(Prscrbr_Type, "Physician Assistant") ~ 2,
+    str_detect(Prscrbr_Type, "Family Practice") ~ 3,
+    str_detect(Prscrbr_Type, "Family Medicine") ~ 3, 
+    str_detect(Prscrbr_Type, "Internal Medicine") ~ 4,
+    str_detect(Prscrbr_Type, "Neurology") ~ 5, 
+    str_detect(Prscrbr_Type, "Psychiatry") ~ 6,
+    str_detect(Prscrbr_Type, "Physical Medicine and Rehab") ~ 7,
+    str_detect(Prscrbr_Type, "General Practice") ~ 8,
+    str_detect(Prscrbr_Type, "Geriatric Medicine") ~ 9,
+    str_detect(Prscrbr_Type, "Emergency Medicine") ~ 10,
+    str_detect(Prscrbr_Type, "Hospitalist") ~ 11,
+    str_detect(Prscrbr_Type, "Nephrology") ~ 12, 
+    str_detect(Prscrbr_Type, "Psychiatry & Neurology") ~ 13,
+    str_detect(Prscrbr_Type, "Neuropsychiatry") ~ 13,
+    str_detect(Prscrbr_Type, "Pulmonary Disease") ~ 14,
+    str_detect(Prscrbr_Type, "Rheumatology") ~ 15, 
+    str_detect(Prscrbr_Type, "Sleep Medicine") ~ 16, 
+    str_detect(Prscrbr_Type, "Cardiology") ~ 17,
+    str_detect(Prscrbr_Type, "Student") ~ 18,
+    str_detect(Prscrbr_Type, "Oncology") ~ 20,
+    str_detect(Prscrbr_Type, "Hematology") ~ 20,
+    str_detect(Prscrbr_Type, "Infectious Disease") ~ 21,
+    str_detect(Prscrbr_Type, "Surgery") ~ 22,
+    str_detect(Prscrbr_Type, "surgery") ~ 22,
+    str_detect(Prscrbr_Type, "Otolaryngology") ~ 22,
+    str_detect(Prscrbr_Type, "Ophthalmology") ~ 22,
+    str_detect(Prscrbr_Type, "Urology") ~ 22,
+    str_detect(Prscrbr_Type, "Endocrinology") ~ 23,
+    str_detect(Prscrbr_Type, "Gastroenterology") ~ 24,
+    str_detect(Prscrbr_Type, "Allergy") ~ 25,
+    str_detect(Prscrbr_Type, "Dermatology") ~ 26,
+    TRUE ~ 19),
+    advanced_pr = case_when(
+      specialty == "1" ~ 1,
+      specialty == "2" ~ 1,
+      TRUE ~ 0),
+    Provider_Type = case_when(
+      specialty %in% c(1,2) ~ "APP",
+      specialty %in% c(3, 4, 8) ~ "IM/FP/General",
+      specialty == 5 ~ "Neurology",
+      specialty %in% c(6,13) ~ "Psych/PsychNeuro", 
+      specialty %in% c(7,12,14,15,16,17,8,11,9,23,24,20,25,21) ~ "IM subs/Geriatrics/PM&R",
+      specialty == 22 ~ "Surgery",
+      specialty %in% c(10,18,19) ~ "Other",
+      TRUE ~ "Other")) %>% 
+  filter(Provider_Type != "Neurology")
+
+prscrb2 <- prscrb %>%
+  group_by(Prscrbr_NPI, Prscrbr_Last_Org_Name, Prscrbr_First_Name, Prscrbr_City, Prscrbr_State_Abrvtn, Prscrbr_Type, Gnrc_Name, pdmed, agonist, class, specialty, advanced_pr, Provider_Type) %>%
+  summarise(
+    beneficiaries = if (all(is.na(Tot_Benes))) NA_real_
+                    else sum(Tot_Benes, na.rm = TRUE),
+    .groups = "drop") %>%
+  rename(NPI = Prscrbr_NPI)
+
+prscrb2 %>%
+  write.csv("GitHub/PD-Prescribers-Mapping/data/Levodopa Providers Cleaned.csv", row.names = FALSE)
+```
+
+# Visualize provider types
+```{r}
+provider_table <- prscrb2 %>%
+  group_by(Provider_Type) %>%
+  summarise(
+    n = n(),
+    `Prescriber Types` = paste(sort(unique(Prscrbr_Type)), collapse = "; "),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    `N (%)` = paste0(n, " (", round(100 * n / sum(n), 1), "%)")
+  ) %>%
+  select(Provider_Type, `Prescriber Types`, `N (%)`) %>%
+  gt() %>%
+  tab_header(
+    title = ""
+  ) %>%
+  cols_label(
+    Provider_Type = "Provider Type",
+    `Prescriber Types` = "Prescriber Types",
+    `N (%)` = "N (%)"
+  ) %>%
+  cols_width(
+    Provider_Type ~ px(140),
+    `Prescriber Types` ~ px(400),
+    `N (%)` ~ px(100)
+  ) %>%
+  tab_options(
+    table.font.size = 11
+  )
+provider_table
+gtsave(
+  provider_table,
+  "GitHub/PD-Prescribers-Mapping/figures/Provider Type Table.png"
+)
+```
+
+# Clean Access Dataset
+```{r}
+quantile(access$SPAR_neuro, probs=c(0.05,0.1, 0.25, 0.5, 0.75,0.9, 0.95))
+spar_10 <- access %>% filter(SPAR_neuro <= 0.21382919) %>%
+  rename(GEOID = id)
+spar_10 %>% 
+  write.csv("GitHub/PD-Prescribers-Mapping/data/10th Percentile Access Tracts.csv", row.names = FALSE)
+```
+
+# Overall Census Tracts
+```{r}
+options(tigris_use_cache = TRUE)
+tracts_us <- tracts(cb=TRUE, year = 2024)
+tracts_us %>%
+  write.csv("GitHub/PD-Prescribers-Mapping/data/2024 Census Tracts.csv", row.names = FALSE)
+```
+

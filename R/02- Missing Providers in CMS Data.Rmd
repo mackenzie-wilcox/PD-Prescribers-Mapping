@@ -1,0 +1,166 @@
+---
+title: "02_Missing Providers in CMS Data"
+author: "Mackenzie Wilcox"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(
+  root.dir = "C:\\Users\\mackw\\Box\\2.Mackenzie\\PD Prescribers (Mapping)\\GitHub\\PD-Prescribers-Mapping")
+```
+
+# Load Libraries and Datasets
+```{r}
+rm(list=ls())
+library(dplyr)
+library(readxl)
+library(readr)
+library(tidyr)
+library(gt)
+prscrb <- read_csv("data/Levodopa Providers Cleaned.csv")
+cms <- read_csv("data/cms_providers_geocoded_12_24_fixed.csv")
+```
+
+# Combine prscrb w/ CMS to have geographic locations for each provider:
+```{r}
+prscrb_geo <- prscrb %>%
+  left_join(cms, by = "NPI")
+write_csv(prscrb_geo,"data/Providers with Geographic Location.csv")
+```
+
+# Identify providers not in the CMS dataset (missing geographic location)
+```{r}
+missing_cms_providers <- prscrb_geo %>% filter(is.na(Ind_PAC_ID))
+write_csv(missing_cms_providers,"data/Providers not in CMS dataset.csv")
+
+# Create a Table by State for Missing Providers:
+states <- missing_cms_providers %>%
+  filter(
+    Prscrbr_State_Abrvtn != "AE",
+    Prscrbr_State_Abrvtn != "PR"
+  ) %>%
+  count(Prscrbr_State_Abrvtn, Provider_Type) %>%
+  pivot_wider(
+    names_from = Provider_Type,
+    values_from = n,
+    values_fill = 0
+  ) %>%
+  mutate(
+    Total = rowSums(across(where(is.numeric)))
+  ) %>%
+  arrange(Prscrbr_State_Abrvtn)
+
+# Calculate N (%) for each provider type
+provider_cols <- setdiff(names(states), c("Prscrbr_State_Abrvtn", "Total"))
+
+states <- states %>%
+  mutate(
+    across(
+      all_of(provider_cols),
+      ~ paste0(
+        .x,
+        " (",
+        round(100 * .x / sum(.x), 1),
+        "%)")),
+    Total = paste0(
+      rowSums(
+        states %>%
+          select(all_of(provider_cols))),
+      " (",round(100 * rowSums(states %>%
+            select(all_of(provider_cols))) /
+        sum(rowSums(states %>%select(all_of(provider_cols)))),1),
+      "%)"))
+
+n <- ceiling(nrow(states) / 2)
+
+left <- states[1:n, ]
+right <- states[(n + 1):nrow(states), ]
+
+if (nrow(right) < nrow(left)) {
+  right <- bind_rows(
+    right,
+    tibble(
+      Prscrbr_State_Abrvtn = NA_character_))}
+
+left <- left %>%
+  rename(State_1 = Prscrbr_State_Abrvtn) %>%
+  rename_with(~ paste0(.x, "_1"), -State_1)
+
+right <- right %>%
+  rename(State_2 = Prscrbr_State_Abrvtn) %>%
+  rename_with(~ paste0(.x, "_2"), -State_2)
+
+provider_state_table <- bind_cols(
+  left,
+  right) %>%
+  gt() %>%
+  cols_label(
+    State_1 = "State",
+    State_2 = "State") %>%
+  cols_label_with(
+    columns = everything(),
+    fn = ~ gsub("_[12]$", "", .x)) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels(
+      columns = c(State_1, State_2))) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(
+      columns = c(State_1, State_2))) %>%
+  sub_missing(
+    columns = everything(),
+    missing_text = "") %>%
+  tab_header(
+    title = "") %>%
+  tab_options(
+  table.font.size = 10,
+  table.width = px(1810),
+  heading.title.font.size = 14) %>%
+  cols_width(
+  State_1 ~ px(30),
+  State_2 ~ px(30),
+  everything() ~ px(125))
+
+provider_state_table
+
+
+gtsave(
+  provider_state_table,
+  "figures/Missing Provider Type by State Table.png",
+  expand = 20,
+  vwidth = 1850)
+
+# Table of Missing Providers Overall
+provider_type_table <- missing_cms_providers %>%
+  group_by(Provider_Type) %>%
+  summarise(
+    n = n()) %>%
+  mutate(
+    `N (%)` = paste0(n, " (", round(100 * n / sum(n), 1), "%)")
+  ) %>%
+  select(Provider_Type, `N (%)`) %>%
+  gt() %>%
+  tab_header(
+    title = ""
+  ) %>%
+  cols_label(
+    Provider_Type = "Provider Type",
+    `N (%)` = "N (%)"
+  ) %>%
+  cols_width(
+    Provider_Type ~ px(140),
+    `N (%)` ~ px(100)
+  ) %>%
+  tab_options(
+    table.font.size = 11
+  )
+provider_type_table
+gtsave(
+  provider_type_table,
+  "figures/Missing Provider Type Table.png"
+)
+```
+
+# 
