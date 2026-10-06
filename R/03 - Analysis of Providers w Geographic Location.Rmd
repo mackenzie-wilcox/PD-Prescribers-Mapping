@@ -20,21 +20,186 @@ library(tidyr)
 library(gt)
 library(sf)
 library(tigris)
-access <- read_csv("data/10th Percentile Access Tracts.csv")
-prscrb <- read_csv("data/Providers with Geographic Location.csv")
-tracts <- read_csv("data/2024 Census Tracts.csv")
+access <- read_csv("data/processed/10th Percentile Access Tracts.csv")
+prscrb <- read_csv("data/processed/Providers with Geographic Location.csv")
 ```
 
 # Clean combined CMS/Prscrb Dataset
 ```{r}
 prscrbr_sf <- prscrb %>%
-  filter(!is.na(latitude) | !is.na(longitude)) %>%
+  filter(!is.na(latitude) & !is.na(longitude)) %>%
   st_as_sf(
     coords = c("longitude", "latitude"),
     crs = 4326)
 
-prscrb %>% filter(is.na(latitude) | is.na(longitude))
+providers_no_geo <- prscrb %>% filter(is.na(latitude) | is.na(longitude) | is.na(address)) %>% select(NPI, Provider_Type, latitude, longitude, address)
+
+
 ```
+
+# Summary of Providers without a Location
+```{r}
+provider_table <- providers_no_geo %>%
+  group_by(Provider_Type) %>%
+  summarise(
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    `N (%)` = paste0(n, " (", round(100 * n / sum(n), 1), "%)")
+  ) %>%
+  select(Provider_Type, `N (%)`) %>%
+  gt() %>%
+  tab_header(
+    title = ""
+  ) %>%
+  cols_label(
+    Provider_Type = "Provider Type",
+    `N (%)` = "N (%)"
+  ) %>%
+  cols_width(
+    Provider_Type ~ px(140),
+    `N (%)` ~ px(100)
+  ) %>%
+  tab_options(
+    table.font.size = 11
+  )
+provider_table
+gtsave(
+  provider_table,
+  "figures/Providers with no location Table.png"
+)
+```
+
+# Table of Total Providers with Location Data:
+```{r}
+provider_table <- prscrbr_sf %>%
+  st_drop_geometry() %>%
+  group_by(Provider_Type) %>%
+  summarise(
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    `N (%)` = paste0(n, " (", round(100 * n / sum(n), 1), "%)")
+  ) %>%
+  select(Provider_Type, `N (%)`) %>%
+  gt() %>%
+  tab_header(
+    title = ""
+  ) %>%
+  cols_label(
+    Provider_Type = "Provider Type",
+    `N (%)` = "N (%)"
+  ) %>%
+  cols_width(
+    Provider_Type ~ px(140),
+    `N (%)` ~ px(100)
+  ) %>%
+  tab_options(
+    table.font.size = 11
+  )
+provider_table
+gtsave(
+  provider_table,
+  "figures/Providers with location Table.png")
+```
+
+# Reduce data to bottom 10 percentile tracts: 
+```{r}
+tracts <- tigris::tracts(cb = TRUE, year = 2024)
+prscrbr_reduced <- prscrbr_sf %>%
+  st_join(
+    tracts_sf %>%
+      filter(GEOID %in% access$GEOID) %>%
+      select(GEOID) %>%
+      st_transform(st_crs(prscrbr_sf)),
+    join = st_within,
+    left = FALSE
+  )
+
+provider_table <- prscrbr_reduced %>%
+  st_drop_geometry() %>%
+  group_by(Provider_Type) %>%
+  summarise(
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    `N (%)` = paste0(n, " (", round(100 * n / sum(n), 1), "%)")
+  ) %>%
+  select(Provider_Type, `N (%)`) %>%
+  gt() %>%
+  tab_header(
+    title = ""
+  ) %>%
+  cols_label(
+    Provider_Type = "Provider Type",
+    `N (%)` = "N (%)"
+  ) %>%
+  cols_width(
+    Provider_Type ~ px(140),
+    `N (%)` ~ px(100)
+  ) %>%
+  tab_options(
+    table.font.size = 11
+  )
+provider_table
+gtsave(
+  provider_table,
+  "figures/Providers in 10th Percentile with location Table.png")
+
+provider_table <- prscrbr_reduced %>%
+  st_drop_geometry() %>%
+  group_by(Provider_Type) %>%
+  summarise(
+    n = n(),
+    bene = if (all(is.na(beneficiaries))) {
+      "unknown"
+    } else {
+      as.character(sum(beneficiaries, na.rm = TRUE))
+    },
+    .groups = "drop"
+  ) %>%
+  mutate(
+    `N (%)` = paste0(n, " (", round(100 * n / sum(n), 1), "%)")
+  ) %>%
+  select(Provider_Type, `N (%)`, bene) %>%
+  gt() %>%
+  tab_header(title = "") %>%
+  cols_label(
+    Provider_Type = "Provider Type",
+    `N (%)` = "N (%)",
+    bene = "Reported Beneficiaries"
+  ) %>%
+  cols_width(
+    Provider_Type ~ px(140),
+    `N (%)` ~ px(100),
+    bene ~ px(120)
+  ) %>%
+  tab_options(
+    table.font.size = 11
+  )
+provider_table
+gtsave(
+  provider_table,
+  "figures/Providers in 10th Percentile (beneficiaries) Table.png")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
