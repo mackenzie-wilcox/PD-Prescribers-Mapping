@@ -1,0 +1,598 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(
+  root.dir = "C:\\Users\\mackw\\Box\\2.Mackenzie\\PD Prescribers (Mapping)\\GitHub\\PD-Prescribers-Mapping")
+```
+
+# Load Libraries and Datasets
+```{r}
+rm(list=ls())
+library(dplyr)
+library(readxl)
+library(readr)
+library(tidyr)
+library(ggplot2)
+library(gt)
+library(sf)
+library(tigris)
+library(leaflet)
+access <- read_csv("data/processed/10th Percentile Access Tracts.csv")
+prscrb <- read_csv("data/processed/Providers with Geographic Location.csv")
+ruca <- read_excel(
+  "C:/Users/mackw/Box/2.Mackenzie/PD Prescribers (Mapping)/GitHub/PD-Prescribers-Mapping/data/raw/RUCA-codes-2020-tract.xlsx",
+  sheet = "RUCA2020 Tract Data",
+  skip = 1)
+```
+
+# Make sure provider data is a sf object
+```{r}
+prscrbr_sf <- prscrb %>%
+  filter(!is.na(latitude) & !is.na(longitude)) %>%
+  st_as_sf(
+    coords = c("longitude", "latitude"),
+    crs = 4326)
+tracts <- tigris::tracts(cb = TRUE, year = 2024)
+prscrbr_reduced <- prscrbr_sf %>%
+  st_join(
+    tracts %>%
+      filter(GEOID %in% access$GEOID) %>%
+      select(GEOID) %>%
+      st_transform(st_crs(prscrbr_sf)),
+    join = st_within,
+    left = FALSE
+  )
+```
+
+# Overview of This Data
+```{r}
+prscrbr_reduced %>% ggplot(aes(x=beneficiaries)) + geom_histogram() + facet_wrap(~Provider_Type)
+
+prscrbr_reduced %>% filter(is.na(beneficiaries)) %>% count(Provider_Type)
+```
+
+# Leaflet Map
+```{r}
+# Summarize providers within each access tract
+provider_tracts <- prscrbr_reduced %>%
+  st_drop_geometry() %>%
+  group_by(GEOID) %>%
+  summarise(
+    providers = n_distinct(NPI),
+    provider_types = paste(
+      sort(unique(Provider_Type)),
+      collapse = "<br>"
+    ),
+    Beneficiaries = if (all(is.na(beneficiaries))) {
+      NA_real_
+    } else {
+      sum(beneficiaries, na.rm = TRUE)
+    },
+    .groups = "drop"
+  )
+
+# Create national tract map data
+contiguous_states <- c(
+  "AL", "AZ", "AR", "CA", "CO", "CT", "DE", "FL",
+  "GA", "ID", "IL", "IN", "IA", "KS", "KY", "LA",
+  "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT",
+  "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND",
+  "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN",
+  "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"
+)
+
+map_tracts_us <- tracts %>%
+  filter(STUSPS %in% contiguous_states) %>%
+  mutate(
+    in_access = GEOID %in% access$GEOID
+  ) %>%
+  left_join(
+    provider_tracts,
+    by = "GEOID"
+  ) %>%
+  mutate(
+    providers = ifelse(
+      is.na(providers) & in_access,
+      0,
+      providers
+    )
+  )
+
+map_tracts_us_simple <- map_tracts_us %>%
+  st_transform(5070) %>%
+  st_simplify(dTolerance = 1000, preserveTopology = TRUE) %>%
+  st_transform(4326)
+
+tracts_background <- map_tracts_us_simple %>%
+  filter(!in_access)
+
+tracts_access <- map_tracts_us_simple %>%
+  filter(in_access)
+
+states_us <- states(cb = TRUE, year = 2024) %>%
+  filter(STUSPS %in% contiguous_states) %>%
+  st_transform(5070) %>%
+  st_simplify(dTolerance = 500, preserveTopology = TRUE) %>%
+  st_transform(4326)
+```
+
+```{r}
+# Provider color scale
+provider_pal <- c(
+  "#9ECAE1",
+  "#6BAED6",
+  "#4292C6",
+  "#2171B5",
+  "#084594"
+)
+# Create national Leaflet map
+ leaflet() %>%
+  addTiles(
+    urlTemplate = paste0(
+     "https://basemaps.cartocdn.com/rastertiles/light_all/",
+      "{z}/{x}/{y}{r}.png?key=cb1_4c1a_1_8e8c2c646cf8dbd9af06a7fb"
+    ),
+    attribution = "&copy; OpenStreetMap contributors &copy; CARTO"
+  ) %>%
+  
+  addPolygons(
+    data = tracts_background,
+    fillColor = "white",
+    fillOpacity = 0.5,
+    color = "gray",
+    weight = 0.3
+  ) %>%
+  
+  addPolygons(
+    data = tracts_access,
+    fillColor = ~ifelse(
+      providers == 0,
+      "#C96B6B",
+      provider_pal(providers)
+    ),
+    fillOpacity = 0.8,
+    color = "gray",
+    weight = 0.3,
+    popup = ~lapply(
+      paste0(
+        "<b>GEOID:</b> ", GEOID,
+        "<br><b>Total Providers:</b> ", providers,
+        "<br><b>Total Reported Beneficiaries:</b> ",
+        ifelse(
+          is.na(Beneficiaries),
+          "Suppressed (<11)",
+          Beneficiaries
+        ),
+        "<br><br><b>Provider Types:</b><br>",
+        provider_types
+      ),
+      htmltools::HTML
+    ),
+    highlightOptions = highlightOptions(
+      weight = 1.5,
+      color = "black",
+      bringToFront = TRUE
+    )
+  ) %>%
+  
+  # State boundaries
+  addPolygons(
+    data = states_us,
+    fill = FALSE,
+    color = "black",
+    weight = 1.5,
+    opacity = 1
+  )
+```
+
+# Static Map 
+```{r}
+library(ggplot2)
+library(sf)
+
+provider_pal <- c(
+  "#9ECAE1",
+  "#6BAED6",
+  "#4292C6",
+  "#2171B5",
+  "#084594"
+)
+
+provider_map <- ggplot() +
+  
+  # Background tracts
+  geom_sf(
+    data = tracts_background,
+    fill = "white",
+    color = "gray80",
+    linewidth = 0.15
+  ) +
+  
+  # Access tracts
+  geom_sf(
+    data = tracts_access,
+    aes(fill = providers),
+    color = "gray70",
+    linewidth = 0.15
+  ) +
+  
+  # State boundaries
+  geom_sf(
+    data = states_us,
+    fill = NA,
+    color = "black",
+    linewidth = 0.5
+  ) +
+  
+  # Provider count scale
+  scale_fill_gradientn(
+    colors = provider_pal,
+    values = scales::rescale(c(1, 5, 9, 13, 18)),
+    limits = c(1, 18),
+    breaks = c(1, 5, 10, 15, 18),
+    na.value = "#C96B6B",
+    name = "Number of Providers"
+  ) +
+  
+  labs(
+    title = "Carbidopa/Levodopa Providers in Low Neurologist-Access Tracts"
+  ) +
+  
+  theme_void() +
+  theme(
+    plot.title = element_text(
+      size = 14,
+      face = "bold",
+      hjust = 0.5
+    ),
+    legend.position = "bottom",
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 9),
+    plot.margin = margin(10, 10, 10, 10)
+  )
+
+provider_map
+```
+
+```{r}
+library(ggplot2)
+library(sf)
+library(patchwork)
+
+# Provider color scale
+provider_pal <- c(
+  "#9ECAE1",
+  "#6BAED6",
+  "#4292C6",
+  "#2171B5",
+  "#084594"
+)
+
+# Common map theme
+map_theme <- theme_void() +
+  theme(
+    plot.title = element_text(
+      size = 13,
+      face = "bold",
+      hjust = 0.5
+    ),
+    legend.position = "bottom",
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 9),
+    plot.margin = margin(5, 5, 5, 5)
+  )
+
+
+# -----------------------------
+# 1. Full map
+# -----------------------------
+
+map_full <- ggplot() +
+  
+  geom_sf(
+    data = tracts_background,
+    fill = "white",
+    color = "gray80",
+    linewidth = 0.15
+  ) +
+  
+  geom_sf(
+    data = tracts_access,
+    aes(fill = providers),
+    color = "gray70",
+    linewidth = 0.15
+  ) +
+  
+  geom_sf(
+    data = states_us,
+    fill = NA,
+    color = "black",
+    linewidth = 0.5
+  ) +
+  
+  scale_fill_gradientn(
+    colors = provider_pal,
+    values = scales::rescale(c(1, 5, 9, 13, 18)),
+    limits = c(1, 18),
+    breaks = c(1, 5, 10, 15, 18),
+    na.value = "#C96B6B",
+    name = "Number of Providers"
+  ) +
+  
+  labs(
+    title = ""
+  ) +
+  
+  map_theme
+
+
+# -----------------------------
+# 2. Tracts WITHOUT providers
+# -----------------------------
+
+map_no_providers <- ggplot() +
+  
+  geom_sf(
+    data = tracts_background,
+    fill = "white",
+    color = "gray80",
+    linewidth = 0.15
+  ) +
+  
+  geom_sf(
+    data = tracts_access %>% filter(providers == 0),
+    fill = "#C96B6B",
+    color = "gray70",
+    linewidth = 0.15
+  ) +
+  
+  geom_sf(
+    data = states_us,
+    fill = NA,
+    color = "black",
+    linewidth = 0.5
+  ) +
+  
+  labs(
+    title = "No Providers"
+  ) +
+  
+  map_theme
+
+
+# -----------------------------
+# 3. Tracts WITH providers
+# -----------------------------
+
+map_providers <- ggplot() +
+  
+  geom_sf(
+    data = tracts_background,
+    fill = "white",
+    color = "gray80",
+    linewidth = 0.15
+  ) +
+  
+  geom_sf(
+    data = tracts_access %>% filter(providers > 0),
+    aes(fill = providers),
+    color = "gray70",
+    linewidth = 0.15
+  ) +
+  
+  geom_sf(
+    data = states_us,
+    fill = NA,
+    color = "black",
+    linewidth = 0.5
+  ) +
+  
+  scale_fill_gradientn(
+    colors = provider_pal,
+    values = scales::rescale(c(1, 5, 9, 13, 18)),
+    limits = c(1, 18),
+    breaks = c(1, 5, 10, 15, 18),
+    name = "Number of Providers"
+  ) +
+  
+  labs(
+    title = "≥1 Provider"
+  ) +
+  
+  map_theme
+
+
+# -----------------------------
+# Combine maps
+# -----------------------------
+
+provider_panel <- 
+  map_full /
+  (map_no_providers + map_providers) +
+  plot_layout(
+    heights = c(1, 1)
+  )
+
+provider_panel
+
+ggsave(
+  "figures/Provider_Availability_Panel.png",
+  plot = provider_panel,
+  width = 12,
+  height = 10,
+  units = "in",
+  dpi = 300
+)
+```
+
+
+# RUCA Codes
+```{r}
+map_tracts <- map_tracts_us %>%
+  left_join(
+    ruca,
+    by = c("GEOID" = "TractFIPS23")
+  )
+
+prscrbr_reduced <- prscrbr_reduced %>%
+  left_join(
+    ruca,
+    by = c("GEOID" = "TractFIPS23")
+  ) 
+prscrbr_reduced <- prscrbr_reduced%>%
+  mutate(
+    RUCA_reduced = case_when(
+      PrimaryRUCA <= 3 ~ "Metropolitan",
+      PrimaryRUCA > 3 & PrimaryRUCA <= 6 ~ "Micropolitan",
+      PrimaryRUCA > 6 & PrimaryRUCA <= 9 ~ "Small Town",
+      PrimaryRUCA == 10 ~ "Rural",
+      TRUE ~ NA_character_),
+    RUCA_reduced = factor(
+      RUCA_reduced,
+      levels = c(
+        "Metropolitan",
+        "Micropolitan",
+        "Small Town",
+        "Rural"
+      )
+    )
+  )
+
+prscrbr_reduced %>% count(Provider_Type, PrimaryRUCA)
+
+provider_plot <- prscrbr_reduced %>%
+  st_drop_geometry() %>%
+  count(RUCA_reduced, Provider_Type) %>%
+  ggplot(
+    aes(
+      x = RUCA_reduced,
+      y = n,
+      fill = Provider_Type
+    )
+  ) +
+  geom_col(width = 0.7) +
+  labs(
+    x = "Area Type",
+    y = "Number of Providers",
+    fill = "Provider Type"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+#provider_plot
+#ggsave(
+  #"figures/Providers in 10th Percentile with RUCA bar chart.png",
+  #provider_plot,
+  #width = 8, height = 6, dpi = 300)
+```
+
+```{r}
+tracts_access <- tracts_access %>%
+  left_join(
+    ruca %>%
+      select(
+        TractFIPS23,
+        PrimaryRUCA
+      ),
+    by = c("GEOID" = "TractFIPS23")
+  ) 
+tracts_access <- tracts_access %>%
+  mutate(
+    RUCA_reduced = case_when(
+      PrimaryRUCA <= 3 ~ "Metropolitan",
+      PrimaryRUCA <= 6 ~ "Micropolitan",
+      PrimaryRUCA <= 9 ~ "Small Town",
+      PrimaryRUCA == 10 ~ "Rural",
+      TRUE ~ NA_character_
+    ),
+    RUCA_reduced = factor(
+      RUCA_reduced,
+      levels = c(
+        "Metropolitan",
+        "Micropolitan",
+        "Small Town",
+        "Rural"
+      )
+    )
+  )
+```
+
+```{r}
+ruca_provider_map <- ggplot() +
+  
+  # Background
+  geom_sf(
+    data = tracts_background,
+    fill = "white",
+    color = "gray85",
+    linewidth = 0.15
+  ) +
+  
+  # Access tracts with providers
+  geom_sf(
+    data = tracts_access %>%
+      filter(providers > 0),
+    aes(fill = RUCA_reduced),
+    color = "gray70",
+    linewidth = 0.15
+  ) +
+  
+  # State boundaries
+  geom_sf(
+    data = states_us,
+    fill = NA,
+    color = "black",
+    linewidth = 0.5
+  ) +
+  
+  scale_fill_manual(
+    values = c(
+      "Metropolitan" = "#3182BD",
+      "Micropolitan" = "#9E9AC8",
+      "Small Town" = "#F16913",
+      "Rural" = "#FDD49E"
+    ),
+    name = "",
+    na.value = "white"
+  ) +
+  
+  labs(
+    title = ""
+  ) +
+  
+  theme_void() +
+  theme(
+    plot.title = element_text(
+      size = 14,
+      face = "bold",
+      hjust = 0.5
+    ),
+    legend.position = "bottom",
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 9),
+    plot.margin = margin(10, 10, 10, 10)
+  )
+
+ruca_provider_map
+```
+
+```{r}
+ggsave(
+  "figures/RUCA Provider Map.png",
+  plot = ruca_provider_map,
+  width = 14,
+  height = 10,
+  units = "in",
+  dpi = 300
+)
+```
+
+
+

@@ -123,23 +123,36 @@ provider_table <- prscrbr_reduced %>%
   group_by(Provider_Type) %>%
   summarise(
     n = n(),
+    `Reported Beneficiaries` = sum(!is.na(beneficiaries)),
+    `No Reported Beneficiaries` = sum(is.na(beneficiaries)),
     .groups = "drop"
   ) %>%
   mutate(
-    `N (%)` = paste0(n, " (", round(100 * n / sum(n), 1), "%)")
+    `N (%)` = paste0(
+      n, " (", round(100 * n / sum(n), 1), "%)"
+    )
   ) %>%
-  select(Provider_Type, `N (%)`) %>%
+  select(
+    Provider_Type,
+    `N (%)`,
+    `Reported Beneficiaries`,
+    `No Reported Beneficiaries`
+  ) %>%
   gt() %>%
   tab_header(
     title = ""
   ) %>%
   cols_label(
     Provider_Type = "Provider Type",
-    `N (%)` = "N (%)"
+    `N (%)` = "N (%)",
+    `Reported Beneficiaries` = "Providers w/ Reported Beneficiaries",
+    `No Reported Beneficiaries` = "Providers w/o Reported Beneficiaries"
   ) %>%
   cols_width(
     Provider_Type ~ px(140),
-    `N (%)` ~ px(100)
+    `N (%)` ~ px(100),
+    `Reported Beneficiaries` ~ px(180),
+    `No Reported Beneficiaries` ~ px(180)
   ) %>%
   tab_options(
     table.font.size = 11
@@ -148,6 +161,35 @@ provider_table
 gtsave(
   provider_table,
   "figures/Providers in 10th Percentile with location Table.png")
+
+provider_plot <- prscrbr_reduced %>%
+  st_drop_geometry() %>%
+  count(Provider_Type) %>%
+  mutate(
+    pct = n / sum(n) * 100
+  ) %>%
+  ggplot(aes(x = "", y = pct, fill = Provider_Type)) +
+  geom_col(width = 0.6) +
+  labs(
+    x = NULL,
+    y = "Percent (%)",
+    fill = "Provider Type"
+  ) +
+  scale_y_continuous(
+    limits = c(-5, 105),
+    expand = c(0, 0)
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+provider_plot
+ggsave(
+  "figures/Providers in 10th Percentile bar chart.png",
+  provider_plot,
+  width = 8, height = 6, dpi = 300)
+
 
 provider_table <- prscrbr_reduced %>%
   st_drop_geometry() %>%
