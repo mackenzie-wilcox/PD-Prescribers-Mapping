@@ -7,7 +7,7 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_knit$set(
-  root.dir = "C:/Users/mackw/Box/2.Mackenzie/PD Prescribers (Mapping)")
+  root.dir = "C:/Users/macwilcox/Box/2.Mackenzie/PD Prescribers (Mapping)/GitHub/PD-Prescribers-Mapping")
 ```
 
 # Load Libraries and Datasets
@@ -22,8 +22,8 @@ library(gt)
 library(sf)
 library(stringr)
 library(tigris)
-access <- read_excel("Analysis Datasets/ne_tr._2024.xlsx")
-prscrb <- read_csv("Analysis Datasets/Data2023.csv")
+access <- read_excel("data/raw/ne_tr._2024.xlsx")
+prscrb <- read_csv("data/raw/PD Prescribers Carbidopa_Levodopa Only.csv")
 ```
 
 # Organize specialties/sub-specialties
@@ -80,15 +80,14 @@ prscrb <- prscrb %>%
   filter(Provider_Type != "Neurology")
 
 prscrb2 <- prscrb %>%
-  group_by(Prscrbr_NPI, Prscrbr_Last_Org_Name, Prscrbr_First_Name, Prscrbr_City, Prscrbr_State_Abrvtn, Prscrbr_Type, Gnrc_Name, pdmed, agonist, class, specialty, advanced_pr, Provider_Type) %>%
+  group_by(Prscrbr_NPI, Prscrbr_Last_Org_Name, Prscrbr_First_Name, Prscrbr_City, Prscrbr_State_Abrvtn, Prscrbr_Type, Gnrc_Name, specialty, advanced_pr, Provider_Type) %>%
   summarise(
     beneficiaries = if (all(is.na(Tot_Benes))) NA_real_
                     else sum(Tot_Benes, na.rm = TRUE),
     .groups = "drop") %>%
   rename(NPI = Prscrbr_NPI)
 
-prscrb2 %>%
-  write.csv("GitHub/PD-Prescribers-Mapping/data/Levodopa Providers Cleaned.csv", row.names = FALSE)
+prscrb2 %>% write.csv("data/processed/NEW Levodopa Providers Cleaned.csv", row.names = FALSE)
 ```
 
 # Visualize provider types
@@ -124,7 +123,7 @@ provider_table <- prscrb2 %>%
 provider_table
 gtsave(
   provider_table,
-  "GitHub/PD-Prescribers-Mapping/figures/Provider Type Table.png"
+  "figures/Supplementary Table 1.png"
 )
 ```
 
@@ -135,13 +134,5 @@ spar_10 <- access %>% filter(SPAR_neuro <= 0.21382919) %>%
   rename(GEOID = id)
 spar_10 %>% 
   write.csv("GitHub/PD-Prescribers-Mapping/data/10th Percentile Access Tracts.csv", row.names = FALSE)
-```
-
-# Overall Census Tracts
-```{r}
-options(tigris_use_cache = TRUE)
-tracts_us <- tracts(cb=TRUE, year = 2024)
-tracts_us %>%
-  write.csv("GitHub/PD-Prescribers-Mapping/data/2024 Census Tracts.csv", row.names = FALSE)
 ```
 
